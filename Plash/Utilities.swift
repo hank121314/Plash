@@ -6,6 +6,8 @@ import Combine
 import Network
 import SystemConfiguration
 import Defaults
+import Preferences
+import Foundation
 
 
 /**
@@ -1890,25 +1892,20 @@ extension NSScreen {
 	}
 }
 
-
-struct Display: Hashable, Codable, Identifiable {
-	/// Self wrapped in an observable that updates when display change.
+struct Monitors: Codable {
 	static let observable = ObservableValue(
 		value: Self.self,
 		publisher: NSScreen.publisher
 	)
 
-	/// The main display.
-	static let main = Self(id: CGMainDisplayID())
-
 	/// All displays.
-	static var all: [Self] {
-		NSScreen.screens.map { self.init(screen: $0) }
+	static var all: [Display] {
+		NSScreen.screens.map { Display(screen: $0) }
 	}
+}
 
-	/// The ID of the display.
-	let id: CGDirectDisplayID
 
+struct Display: Defaults.Serializable {
 	/// The `NSScreen` for the display.
 	var screen: NSScreen? { NSScreen.from(cgDirectDisplayID: id) }
 
@@ -1918,8 +1915,22 @@ struct Display: Hashable, Codable, Identifiable {
 	/// Whether the display is connected.
 	var isConnected: Bool { screen?.isConnected ?? false }
 
-	/// Get the main display if the current display is not connected.
-	var withFallbackToMain: Self { isConnected ? self : .main }
+	/// The ID of the display.
+	var id: CGDirectDisplayID
+
+	var isEnabled = false
+
+	var url = URL(string: "about:blank")
+
+	var opacity = 1.0
+
+	var reloadInterval: Double?
+
+	var showOnAllSpaces = false
+
+	var invertColors = false
+
+	var customCSS = ""
 
 	init(id: CGDirectDisplayID) {
 		self.id = id
@@ -1928,8 +1939,70 @@ struct Display: Hashable, Codable, Identifiable {
 	init(screen: NSScreen) {
 		self.id = screen.id
 	}
+
+	init(_ id: CGDirectDisplayID, _ isEnabled: Bool, _ url: URL?, _ opacity: Double, _ reloadInterval: Double?, _ showOnAllSpaces: Bool, _ invertColors: Bool, _ customCSS: String) {
+		self.id = id
+		self.isEnabled = isEnabled
+		self.url = url
+		self.opacity = opacity
+		self.reloadInterval = reloadInterval
+		self.showOnAllSpaces = showOnAllSpaces
+		self.invertColors = invertColors
+		self.customCSS = customCSS
+	}
+
+	static let bridge = DisplayBridge()
 }
 
+struct DisplayBridge: Defaults.Bridge {
+	typealias Value = Display
+	typealias Serializable = [String: Any]
+
+	func serialize(_ value: Value?) -> Serializable? {
+		guard let value = value else {
+			return nil
+		}
+
+		var dictionary = [
+			"id": value.id,
+			"isEnabled": value.isEnabled,
+			"opacity": value.opacity,
+			"showOnAllSpaces": value.showOnAllSpaces,
+			"invertColors": value.invertColors,
+			"customCSS": value.customCSS
+		] as [String: Any]
+
+		if let url = URL.bridge.serialize(value.url) {
+			dictionary["url"] = url
+		}
+
+		if let reloadInterval = value.reloadInterval {
+			dictionary["reloadInterval"] = reloadInterval
+		}
+
+		return dictionary
+	}
+
+	func deserialize(_ object: Serializable?) -> Value? {
+		guard
+			let object = object,
+			let id = object["id"] as? CGDirectDisplayID,
+			let isEnabled = object["isEnabled"] as? Bool,
+			let opacity = object["opacity"] as? Double,
+			let showOnAllSpaces = object["showOnAllSpaces"] as? Bool,
+			let invertColors = object["invertColors"] as? Bool,
+			let customCSS = object["customCSS"] as? String
+		else {
+			return nil
+		}
+
+		let url = URL.bridge.deserialize(object["url"] as? String)
+
+		let reloadInterval = object["reloadInterval"] as? Double
+
+		return Display(id, isEnabled, url, opacity, reloadInterval, showOnAllSpaces, invertColors, customCSS)
+	}
+}
 
 extension String {
 	/// Word wrap the string at the given length.
@@ -2865,6 +2938,16 @@ extension Dictionary {
 	}
 }
 
+extension Dictionary where Key == CGDirectDisplayID, Value == Display {
+	mutating func get(forKey: Key) -> Value {
+		guard let instance = self[forKey] else {
+			let value = Value(id: forKey)
+			self[forKey] = value
+			return self[forKey]!
+		}
+		return instance
+	}
+}
 
 extension NSResponder {
 	// This method is internally implemented on `NSResponder` as `Error` is generic which comes with many limitations.
@@ -2922,7 +3005,6 @@ extension Error {
 		NSApp.presentError(self)
 	}
 }
-
 
 /**
 Creates a window controller that can only ever have one window.
@@ -2994,7 +3076,6 @@ class SingletonWindowController: NSWindowController, NSWindowDelegate { // swift
 	@available(*, unavailable)
 	override func showWindow(_ sender: Any?) {}
 }
-
 
 enum AssociationPolicy {
 	case assign

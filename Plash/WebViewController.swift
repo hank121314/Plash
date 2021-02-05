@@ -3,7 +3,16 @@ import WebKit
 import Defaults
 
 final class WebViewController: NSViewController {
+	var id: CGDirectDisplayID = 0
+
+	convenience init(id: CGDirectDisplayID) {
+		self.init()
+		self.id = id
+	}
+
 	private var popupWindow: NSWindow?
+
+	var isBrowsingMode: Bool = false
 
 	/// Closure to call when the web view finishes loading a page.
 	var onLoaded: ((Error?) -> Void)?
@@ -21,12 +30,12 @@ final class WebViewController: NSViewController {
 
 		userContentController.muteAudio()
 
-		if Defaults[.invertColors] {
+		if Defaults[.displays][id]!.invertColors {
 			userContentController.invertColors()
 		}
 
-		if !Defaults[.customCSS].trimmed.isEmpty {
-			userContentController.addCSS(Defaults[.customCSS])
+		if !Defaults[.displays][id]!.customCSS.trimmed.isEmpty {
+			userContentController.addCSS(Defaults[.displays][id]!.customCSS)
 		}
 
 		let preferences = WKPreferences()
@@ -119,7 +128,7 @@ extension WebViewController: WKNavigationDelegate {
 
 extension WebViewController: WKUIDelegate {
 	func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-		guard AppDelegate.shared.isBrowsingMode else {
+		guard isBrowsingMode else {
 			// This makes it so that requests to open something in a new window just opens in the existing web view.
 			if navigationAction.targetFrame == nil {
 				webView.load(navigationAction.request)
@@ -162,7 +171,7 @@ extension WebViewController: WKUIDelegate {
 	}
 
 	func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
-		guard AppDelegate.shared.isBrowsingMode else {
+		guard isBrowsingMode else {
 			completionHandler()
 			return
 		}
@@ -171,7 +180,7 @@ extension WebViewController: WKUIDelegate {
 	}
 
 	func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
-		guard AppDelegate.shared.isBrowsingMode else {
+		guard isBrowsingMode else {
 			completionHandler(false)
 			return
 		}
@@ -180,7 +189,7 @@ extension WebViewController: WKUIDelegate {
 	}
 
 	func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
-		guard AppDelegate.shared.isBrowsingMode else {
+		guard isBrowsingMode else {
 			completionHandler(nil)
 			return
 		}
@@ -190,7 +199,7 @@ extension WebViewController: WKUIDelegate {
 
 	// swiftlint:disable:next discouraged_optional_collection
 	func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
-		guard AppDelegate.shared.isBrowsingMode else {
+		guard isBrowsingMode else {
 			completionHandler(nil)
 			return
 		}

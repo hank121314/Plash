@@ -2,16 +2,7 @@ import SwiftUI
 import Defaults
 
 struct OpenURLView: View {
-	@State private var urlString: String = {
-		guard
-			let url = Defaults[.url],
-			!url.isFileURL
-		else {
-			return ""
-		}
-
-		return url.absoluteString.removingPercentEncoding ?? url.absoluteString
-	}()
+	@Binding var urlString: String
 
 	private var normalizedUrlString: String {
 		URL(humanString: urlString)?.absoluteString ?? urlString
@@ -38,15 +29,22 @@ struct OpenURLView: View {
 				}
 					.box()
 			}
-			TextField(
-				"sindresorhus.com",
-				// `removingNewlines` is a workaround for a SwiftUI bug where it doesn't respect the line limit when pasting in multiple lines.
-				// TODO: Report to Apple. Still an issue on macOS 11.
-				text: $urlString.setMap(\.removingNewlines)
-			)
-				.lineLimit(1)
-				.frame(minWidth: 400)
-				.padding(.vertical)
+			HStack {
+			  TextField(
+				  "sindresorhus.com",
+				  // `removingNewlines` is a workaround for a SwiftUI bug where it doesn't respect the line limit when pasting in multiple lines.
+				  // TODO: Report to Apple. Still an issue on macOS 11.
+				  text: $urlString.setMap(\.removingNewlines)
+			  )
+				  .lineLimit(1)
+				  .frame(minWidth: 350)
+				  .padding(.vertical)
+			  NativeButton("Open Local Website") {
+				AppDelegate.shared.openLocalWebsite(directoryURL: URL(string: normalizedUrlString)) { url in
+					loadHandler(url)
+				}
+			  }
+			}
 			// TODO: Use `Button` when targeting macOS 11.
 			NativeButton("Open", keyEquivalent: .return) {
 				guard let url = URL(string: normalizedUrlString) else {
@@ -55,7 +53,8 @@ struct OpenURLView: View {
 
 				loadHandler(url)
 			}
-				.disabled(!URL.isValid(string: normalizedUrlString))
+			.disabled(!URL.isValid(string: normalizedUrlString))
+				.frame(maxWidth: .infinity)
 		}
 			.padding()
 	}
@@ -63,6 +62,6 @@ struct OpenURLView: View {
 
 struct OpenURLView_Previews: PreviewProvider {
 	static var previews: some View {
-		OpenURLView { _ in }
+		OpenURLView(urlString: .constant("about:blank")) { _ in }
 	}
 }

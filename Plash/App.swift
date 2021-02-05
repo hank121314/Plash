@@ -3,6 +3,7 @@ import Combine
 import AppCenter
 import AppCenterCrashes
 import Defaults
+import Preferences
 
 /*
 TODO: When targeting macOS 11:
@@ -29,55 +30,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 	lazy var statusItemButton = statusItem.button!
 
-	lazy var webViewController = WebViewController()
-
-	lazy var desktopWindow = with(DesktopWindow(screen: Defaults[.display].screen)) {
-		$0.contentView = webViewController.webView
-		$0.contentView?.isHidden = true
-	}
-
-	var isBrowsingMode = false {
-		didSet {
-			desktopWindow.isInteractive = isBrowsingMode
-			desktopWindow.alphaValue = isBrowsingMode ? 1 : CGFloat(Defaults[.opacity])
-			resetTimer()
+	lazy var desktopMonitors = Defaults[.displays].reduce(into: [CGDirectDisplayID: DesktopMonitor]()) { memo, tuple in
+		if tuple.value.isEnabled {
+			memo[tuple.key] = DesktopMonitor(display: tuple.value)
 		}
 	}
 
-	var isEnabled = true {
-		didSet {
-			statusItemButton.appearsDisabled = !isEnabled
+	lazy var preferences: [PreferencePane] = [
+		GeneralSettingsPane(),
+		MonitorSettingsPane()
+	]
 
-			if isEnabled {
-				loadUserURL()
-				desktopWindow.makeKeyAndOrderFront(self)
-			} else {
-				// TODO: Properly unload the web view instead of just clearing and hiding it.
-				desktopWindow.orderOut(self)
-				loadURL(URL("about:blank"))
-			}
-		}
-	}
-
-	var reloadTimer: Timer?
-
-	var webViewError: Error? {
-		didSet {
-			if let error = webViewError {
-				statusItemButton.toolTip = "Error: \(error.localizedDescription)"
-				statusItemButton.contentTintColor = .systemRed
-
-				// TODO: Also present the error when the user just added it from the input box as then it's also "interactive".
-				if isBrowsingMode {
-					NSApp.presentError(error)
-				}
-
-				return
-			}
-
-			statusItemButton.contentTintColor = nil
-		}
-	}
+	lazy var preferencesWindowController = PreferencesWindowController(
+			preferencePanes: preferences,
+			style: .toolbarItems,
+			animated: true
+	)
 
 	func applicationWillFinishLaunching(_ notification: Notification) {
 		UserDefaults.standard.register(defaults: [
@@ -94,83 +62,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		)
 
 		_ = statusItemButton
-		_ = desktopWindow
+		_ = desktopMonitors
 
 		setUpEvents()
 		showWelcomeScreenIfNeeded()
 	}
 
-	func setEnabledStatus() {
-		isEnabled = !(Defaults[.deactivateOnBattery] && powerSourceWatcher?.powerSource.isUsingBattery == true)
-	}
-
-	func resetTimer() {
-		reloadTimer?.invalidate()
-		reloadTimer = nil
-
-		guard !isBrowsingMode else {
-			return
-		}
-
-		guard let reloadInterval = Defaults[.reloadInterval] else {
-			return
-		}
-
-		reloadTimer = Timer.scheduledTimer(withTimeInterval: reloadInterval, repeats: true) { [self] _ in
-			loadUserURL()
-		}
-	}
-
-	func recreateWebView() {
-		webViewController.recreateWebView()
-		desktopWindow.contentView = webViewController.webView
-	}
-
-	func recreateWebViewAndReload() {
-		recreateWebView()
-		loadUserURL()
-	}
-
-	func loadUserURL() {
-		loadURL(Defaults[.url])
-	}
-
-	func loadURL(_ url: URL?) {
-		webViewError = nil
-
-		guard var url = url else {
-			return
-		}
-
-		do {
-			url = try replacePlaceholders(of: url) ?? url
-		} catch {
-			error.presentAsModal()
-			return
-		}
-
-		// TODO: This is just a quick fix. The proper fix is to create a new web view below the existing one (with no opacity), load the URL, if it succeeds, we fade out the old one while fading in the new one. If it fails, we discard the new web view.
-		if !url.isFileURL, !Reachability.isOnlineExtensive() {
-			webViewError = NSError.appError("No internet connection.")
-			return
-		}
-
-		// TODO: Report the bug to Apple.
-		// WKWebView has a bug where it can only load a local file once. So if you load file A, load file B, and load file A again, it errors. And if you load the same file as the existing one, nothing happens. Quality engineering.
-		if url.isFileURL {
-			recreateWebView()
-		}
-
-		webViewController.loadURL(url)
-
-		// TODO: Add a callback to `loadURL` when it's done loading instead.
-		// TODO: Fade in the web view.
-		delay(seconds: 1) { [self] in
-			desktopWindow.contentView?.isHidden = false
-		}
-	}
-
-	func openLocalWebsite() {
+	func openLocalWebsite(directoryURL: URL?, loadHandler: @escaping (URL) -> Void) {
 		NSApp.activate(ignoringOtherApps: true)
 
 		let panel = NSOpenPanel()
@@ -184,15 +82,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		panel.level = .floating
 
 		if
-			let url = Defaults[.url],
+			let url = directoryURL,
 			url.isFileURL
 		{
 			panel.directoryURL = url
 		}
 
-		panel.begin { [weak self] in
+		guard let window = preferencesWindowController.window else {
+			return
+		}
+
+		panel.beginSheetModal(for: window) { [weak self] in
 			guard
-				let self = self,
 				$0 == .OK,
 				let url = panel.url
 			else {
@@ -201,7 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 			guard url.appendingPathComponent("index.html", isDirectory: false).exists else {
 				NSAlert.showModal(message: "Please choose a directory that contains a “index.html” file.")
-				self.openLocalWebsite()
+				self?.openLocalWebsite(directoryURL: directoryURL, loadHandler: loadHandler)
 				return
 			}
 
@@ -212,22 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 				return
 			}
 
-			Defaults[.url] = url
+			loadHandler(url)
 		}
-	}
-
-	/**
-	Replaces app-specific placeholder strings in the given URL with a corresponding value.
-	*/
-	func replacePlaceholders(of url: URL) throws -> URL? {
-		// Here we swap out `[[screenWidth]]` and `[[screenHeight]]` for their actual values.
-		// We proceed only if we have an `NSScreen` to work with.
-		guard let screen = desktopWindow.targetScreen?.withFallbackToMain ?? .main else {
-			return nil
-		}
-
-		return try url
-			.replacingPlaceholder("[[screenWidth]]", with: String(format: "%.0f", screen.visibleFrameWithoutStatusBar.width))
-			.replacingPlaceholder("[[screenHeight]]", with: String(format: "%.0f", screen.visibleFrameWithoutStatusBar.height))
 	}
 }
